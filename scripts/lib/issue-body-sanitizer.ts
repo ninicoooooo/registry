@@ -1,36 +1,32 @@
+import { parse } from "yaml";
+
 /**
  * Issue-form body sanitizer.
  *
- * GitHub issue forms render each field as an `### <label>` heading, and the
- * downstream parser (stefanbuck/github-issue-parser) treats EVERY h3 line as a
- * field boundary. An `### ...` line inside a free-text field value therefore
- * truncates that field and silently drops everything up to the next known
- * heading (see daegu-4, #11151: `### TAE · v0.3.1` inside the description
- * reduced it to `# Daegu`).
+ * GitHub issue forms render each field as an h3 label heading, and the
+ * downstream parser treats every h3 line as a field boundary. An h3 line
+ * inside a free-text field value therefore truncates that field.
  *
- * The fix is lossless: before parsing, demote any h3 line whose title is NOT
- * one of the template's field labels to an h4 (`#### ...`). Known field
- * headings are left untouched, so parsing is unchanged for well-formed bodies.
+ * Before parsing, unknown h3 headings are demoted to h4. Known field headings
+ * remain unchanged.
  */
 
 const H3_LINE = /^###(?!#)[ \t]*(.*?)[ \t]*$/;
 
+type IssueTemplate = {
+  body?: Array<{ attributes?: { label?: unknown } }>;
+};
+
 /**
- * Extracts the field labels from an issue-template YAML by scanning `label:`
- * lines. Deliberately regex-based so the sanitizer stays dependency-free; the
- * registry's templates only use plain single-line string labels.
+ * Extracts labels from parsed GitHub issue-form YAML. Parsing YAML preserves
+ * quoted labels that wrap across physical lines.
  */
 export function extractTemplateLabels(templateYaml: string): Set<string> {
+  const template = parse(templateYaml) as IssueTemplate;
   const labels = new Set<string>();
-  for (const match of templateYaml.matchAll(/^[ \t]*["']?label["']?:[ \t]*(.+?)[ \t]*$/gm)) {
-    let label = match[1];
-    if (
-      (label.startsWith('"') && label.endsWith('"') && label.length >= 2) ||
-      (label.startsWith("'") && label.endsWith("'") && label.length >= 2)
-    ) {
-      label = label.slice(1, -1);
-    }
-    if (label.length > 0) labels.add(label);
+  for (const field of template.body ?? []) {
+    const label = field.attributes?.label;
+    if (typeof label === "string" && label.length > 0) labels.add(label);
   }
   return labels;
 }
@@ -42,9 +38,8 @@ export interface SanitizedIssueBody {
 }
 
 /**
- * Demotes every `### <title>` line whose title is not a known field label to
- * `#### <title>`. Exact-label headings (the real field boundaries) and all
- * other content pass through byte-identical.
+ * Demotes every unknown h3 heading to h4. Exact-label headings and all other
+ * content pass through unchanged.
  */
 export function sanitizeIssueBody(
   body: string,
